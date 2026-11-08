@@ -1,26 +1,20 @@
-
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-MODEL_NAME = "models/flan-t5-small"
+MODEL_NAME = "google/flan-t5-small"
 
 
 class RAGAssistant:
 
     def __init__(self):
-
-        print("Loading local FLAN-T5 model...")
+        print("Loading FLAN-T5 model from Hugging Face...")
 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            MODEL_NAME,
-            local_files_only=True,
-            use_fast=False
+            MODEL_NAME
         )
 
         self.model = AutoModelForSeq2SeqLM.from_pretrained(
-            MODEL_NAME,
-            local_files_only=True,
-            use_safetensors=True
+            MODEL_NAME
         )
 
         self.model.eval()
@@ -32,14 +26,11 @@ class RAGAssistant:
         prompt = f"""
 You are a document question answering assistant.
 
-Read the CONTEXT carefully and answer the QUESTION using only information explicitly stated in the context.
+Answer using only the information in the context.
+Do not guess or invent information.
+Give a short and direct answer.
 
-Rules:
-1. Give a short, direct answer.
-2. Do not guess or invent information.
-3. Do not mix unrelated details.
-4. Do not treat an office, training center, or internship location as a university.
-5. If the answer is not clearly available, say exactly:
+If the information is missing, say:
 I could not find this information in your documents.
 
 CONTEXT:
@@ -48,7 +39,7 @@ CONTEXT:
 QUESTION:
 {question}
 
-DIRECT ANSWER:
+ANSWER:
 """
 
         inputs = self.tokenizer(
@@ -59,24 +50,20 @@ DIRECT ANSWER:
         )
 
         with torch.no_grad():
-
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=80,
                 num_beams=4,
                 do_sample=False,
-                repetition_penalty=1.2,
-                early_stopping=True
+                repetition_penalty=1.2
             )
 
         answer = self.tokenizer.decode(
             outputs[0],
             skip_special_tokens=True
-        )
+        ).strip()
 
-        answer = answer.strip()
-
-        if not answer or answer.lower() in ["a).", "a)", "answer:"]:
+        if not answer:
             return "I could not find this information in your documents."
 
         return answer
