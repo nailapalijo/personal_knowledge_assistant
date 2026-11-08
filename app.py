@@ -25,10 +25,14 @@ st.set_page_config(
 st.markdown("""
 <style>
 
+/* Main background */
+
 .stApp {
     background: linear-gradient(135deg, #0b1020, #17132e);
-    color: #ffffff;
+    color: #F8FAFC;
 }
+
+/* Main container */
 
 .block-container {
     max-width: 1200px;
@@ -36,37 +40,71 @@ st.markdown("""
     padding-bottom: 3rem;
 }
 
+/* Headings */
+
 h1, h2, h3 {
-    color: #a78bfa !important;
+    color: #A78BFA !important;
 }
+
+/* General text visibility */
+
+.stApp p,
+.stApp li,
+.stApp label,
+.stApp [data-testid="stCaptionContainer"] {
+    color: #F8FAFC;
+}
+
+/* Buttons */
 
 .stButton > button,
 .stFormSubmitButton > button {
-    background: linear-gradient(90deg, #6d4aff, #8b5cf6);
-    color: white !important;
-    border: none;
+    background: linear-gradient(90deg, #6d4aff, #8b5cf6) !important;
+    color: #FFFFFF !important;
+    border: none !important;
     border-radius: 10px;
-    min-height: 44px;
+    min-height: 48px;
     font-weight: 600;
     width: 100%;
-    transition: 0.2s ease;
+    transition: background 0.2s ease;
+    touch-action: manipulation;
+    cursor: pointer;
+}
+
+.stButton > button p,
+.stFormSubmitButton > button p {
+    color: #FFFFFF !important;
 }
 
 .stButton > button:hover,
 .stFormSubmitButton > button:hover {
-    background: #9b7bff;
-    border: none;
-    transform: translateY(-1px);
+    background: #9b7bff !important;
+    border: none !important;
 }
+
+/* Sidebar */
 
 [data-testid="stSidebar"] {
     background: #111827;
 }
 
+/* Text input */
+
 .stTextInput input {
+    color: #F8FAFC !important;
+    background-color: #172033 !important;
     border-radius: 10px;
-    min-height: 44px;
+    min-height: 48px;
+    border: 1px solid #64748b !important;
+    font-size: 16px !important;
 }
+
+.stTextInput input::placeholder {
+    color: #CBD5E1 !important;
+    opacity: 1;
+}
+
+/* File uploader */
 
 [data-testid="stFileUploader"] {
     border: 1px dashed #8b5cf6;
@@ -74,12 +112,31 @@ h1, h2, h3 {
     padding: 10px;
 }
 
+/* Chat messages */
+
 [data-testid="stChatMessage"] {
-    background: rgba(255,255,255,0.04);
+    background: #172033 !important;
+    color: #F8FAFC !important;
+    border: 1px solid rgba(167,139,250,0.2);
     border-radius: 12px;
-    padding: 12px;
+    padding: 14px;
     margin-bottom: 10px;
 }
+
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessage"] span {
+    color: #F8FAFC !important;
+}
+
+/* Markdown answer text */
+
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li {
+    color: #F8FAFC !important;
+}
+
+/* Metrics */
 
 [data-testid="stMetric"] {
     background: rgba(139,92,246,0.10);
@@ -88,12 +145,26 @@ h1, h2, h3 {
     padding: 12px;
 }
 
+[data-testid="stMetricValue"] {
+    color: #FFFFFF !important;
+}
+
+/* Expanders */
+
 [data-testid="stExpander"] {
     border: 1px solid rgba(167,139,250,0.3);
     border-radius: 12px;
 }
 
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary p {
+    color: #F8FAFC !important;
+}
+
+/* Mobile responsive */
+
 @media screen and (max-width: 768px) {
+
     .block-container {
         padding: 1rem 0.8rem 2rem 0.8rem;
     }
@@ -111,18 +182,24 @@ h1, h2, h3 {
         font-size: 1.1rem !important;
     }
 
-    .stButton > button,
-    .stFormSubmitButton > button {
-        width: 100%;
-        min-height: 46px;
+    .stButton > button {
+        width: 100% !important;
+        min-height: 50px !important;
+        font-size: 16px !important;
+    }
+
+    .stTextInput input {
+        min-height: 50px !important;
+        font-size: 16px !important;
     }
 
     [data-testid="stChatMessage"] {
-        padding: 10px;
+        padding: 12px;
     }
 }
 
 @media screen and (max-width: 480px) {
+
     .block-container {
         padding-left: 0.6rem;
         padding-right: 0.6rem;
@@ -135,7 +212,6 @@ h1, h2, h3 {
     [data-testid="stMetricValue"] {
         font-size: 1.5rem;
     }
-
 }
 
 </style>
@@ -171,7 +247,7 @@ if "chat_history" not in st.session_state:
 
 
 # ---------------------------------
-# RESTORE SAVED KNOWLEDGE BASE
+# RESTORE KNOWLEDGE BASE
 # ---------------------------------
 
 if st.session_state.knowledge_base is None:
@@ -195,14 +271,14 @@ st.title("🧠 Personal Knowledge Assistant")
 
 st.write(
     "Your private AI assistant. Upload your documents "
-    "and ask questions using your local AI model."
+    "and ask questions using your AI model."
 )
 
 st.divider()
 
 
 # ---------------------------------
-# SIDEBAR - DOCUMENT LIBRARY
+# SIDEBAR
 # ---------------------------------
 
 with st.sidebar:
@@ -217,7 +293,8 @@ with st.sidebar:
 
     process_button = st.button(
         "⚡ Process Documents",
-        use_container_width=True
+        use_container_width=True,
+        key="process_documents_button"
     )
 
     st.divider()
@@ -239,7 +316,11 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("🗑️ Clear Chat", use_container_width=True):
+    if st.button(
+        "🗑️ Clear Chat",
+        use_container_width=True,
+        key="clear_chat_button"
+    ):
         st.session_state.chat_history = []
         st.rerun()
 
@@ -256,7 +337,7 @@ if process_button:
 
     else:
 
-        with st.spinner("Loading AI and processing documents..."):
+        with st.spinner("Processing documents..."):
 
             try:
 
@@ -276,9 +357,7 @@ if process_button:
 
                     file_path = upload_folder / uploaded_file.name
 
-                    file_path.write_bytes(
-                        uploaded_file.getvalue()
-                    )
+                    file_path.write_bytes(uploaded_file.getvalue())
 
                     try:
 
@@ -325,9 +404,7 @@ st.divider()
 
 st.header("💬 Ask Your Documents")
 
-st.write(
-    "Ask anything related to your uploaded documents."
-)
+st.write("Ask anything related to your uploaded documents.")
 
 
 # ---------------------------------
@@ -337,28 +414,29 @@ st.write(
 for message in st.session_state.chat_history:
 
     with st.chat_message(message["role"]):
-        st.write(message["content"])
+        st.markdown(message["content"])
 
 
 # ---------------------------------
 # QUESTION INPUT
 # ---------------------------------
 
-with st.form("question_form", clear_on_submit=True):
+question = st.text_input(
+    "Your question",
+    placeholder="Example: What is my educational background?",
+    key="question_input"
+)
 
-    question = st.text_input(
-        "Your question",
-        placeholder="Example: What is my educational background?"
-    )
-
-    ask_button = st.form_submit_button(
-        "Ask AI 🚀",
-        use_container_width=True
-    )
+ask_button = st.button(
+    "Ask AI 🚀",
+    use_container_width=True,
+    key="ask_ai_button",
+    type="primary"
+)
 
 
 # ---------------------------------
-# QUESTION-BASED SEARCH
+# IMPROVE SEARCH QUERY
 # ---------------------------------
 
 def improve_search_query(question):
@@ -433,10 +511,8 @@ if ask_button:
 
             try:
 
-                # Improve query according to question type
                 search_query = improve_search_query(question)
 
-                # Retrieve relevant document chunks
                 results = (
                     st.session_state.knowledge_base.search_documents(
                         search_query,
@@ -457,6 +533,9 @@ if ask_button:
                         context
                     )
 
+                    if not answer or not str(answer).strip():
+                        answer = "The AI model returned an empty response. Please try again."
+
                 else:
 
                     answer = (
@@ -466,12 +545,15 @@ if ask_button:
 
                 st.session_state.chat_history.append({
                     "role": "assistant",
-                    "content": answer
+                    "content": str(answer)
                 })
 
             except Exception as error:
 
-                st.error(f"AI Error: {error}")
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": f"AI Error: {error}"
+                })
 
         st.rerun()
 
@@ -485,7 +567,7 @@ st.divider()
 with st.expander("ℹ️ About This Project"):
 
     st.write("""
-    Personal Knowledge Assistant is a local AI-powered application.
+    Personal Knowledge Assistant is an AI-powered application.
 
     **Features:**
 
@@ -498,7 +580,7 @@ with st.expander("ℹ️ About This Project"):
     - Retrieval-Augmented Generation (RAG)
     - Local FLAN-T5 language model
 
-    **Privacy:** AI models run locally on your computer.
+    **Privacy:** The application uses its configured AI model.
     No paid OpenAI API is required.
     """)
 
