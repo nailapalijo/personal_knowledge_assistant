@@ -2,11 +2,11 @@
 from sentence_transformers import SentenceTransformer
 
 
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_NAME = "intfloat/multilingual-e5-small"
 
 
 def load_embedding_model():
-    """Load the Hugging Face embedding model."""
+    """Load the multilingual Hugging Face embedding model for local inference."""
     return SentenceTransformer(MODEL_NAME)
 
 
@@ -16,8 +16,16 @@ def create_embeddings(texts, model):
         return []
 
     embeddings = model.encode(
-        texts,
+        [f"passage: {text}" for text in texts],
         normalize_embeddings=True
     )
 
     return embeddings
+
+
+def create_query_embedding(query, model):
+    """Encode a retrieval query using the E5 query prefix."""
+    return model.encode(
+        f"query: {query}",
+        normalize_embeddings=True
+    )

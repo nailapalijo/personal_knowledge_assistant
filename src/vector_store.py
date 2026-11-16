@@ -8,15 +8,18 @@ import numpy as np
 
 class VectorStore:
 
-    def __init__(self, dimension=384):
+    def __init__(self, dimension=384, storage_dir=None):
+
         self.dimension = dimension
-        self.storage_dir = Path("data/faiss")
+
+        self.storage_dir = Path(storage_dir or "data/faiss")
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         self.index_path = self.storage_dir / "index.faiss"
         self.chunks_path = self.storage_dir / "chunks.json"
 
         self.index = faiss.IndexFlatIP(dimension)
+
         self.text_chunks = []
         self.sources = []
 
@@ -27,6 +30,27 @@ class VectorStore:
         if not chunks:
             return
 
+        vectors = self._validated_embeddings(chunks, embeddings)
+
+        self.index.add(vectors)
+
+        self.text_chunks.extend(chunks)
+        self.sources.extend([source] * len(chunks))
+
+        self.save()
+
+    def replace_documents(self, chunks, embeddings, sources):
+        if len(chunks) != len(sources):
+            raise ValueError("Chunks and sources count do not match.")
+
+        vectors = self._validated_embeddings(chunks, embeddings)
+        self.index = faiss.IndexFlatIP(self.dimension)
+        self.index.add(vectors)
+        self.text_chunks = list(chunks)
+        self.sources = list(sources)
+        self.save()
+
+    def _validated_embeddings(self, chunks, embeddings):
         vectors = np.asarray(embeddings, dtype="float32")
 
         if vectors.ndim != 2 or vectors.shape[1] != self.dimension:
@@ -35,23 +59,33 @@ class VectorStore:
         if len(chunks) != len(vectors):
             raise ValueError("Chunks and embeddings count do not match.")
 
-        self.index.add(vectors)
-        self.text_chunks.extend(chunks)
-        self.sources.extend([source] * len(chunks))
+        if not np.isfinite(vectors).all():
+            raise ValueError("Embeddings contain invalid numeric values.")
 
-        self.save()
+        if np.any(np.linalg.norm(vectors, axis=1) == 0):
+            raise ValueError("An embedding contains a zero vector.")
+
+        faiss.normalize_L2(vectors)
+        return vectors
 
     def save(self):
 
-        faiss.write_index(self.index, str(self.index_path))
+        faiss.write_index(
+            self.index,
+            str(self.index_path)
+        )
 
         data = {
             "chunks": self.text_chunks,
             "sources": self.sources
         }
 
-        with open(self.chunks_path, "w", encoding="utf-8") as file:
+        temporary_path = self.chunks_path.with_suffix(".tmp")
+
+        with open(temporary_path, "w", encoding="utf-8") as file:
             json.dump(data, file, ensure_ascii=False, indent=2)
+
+        temporary_path.replace(self.chunks_path)
 
     def load(self):
 
@@ -83,15 +117,28 @@ class VectorStore:
         self.text_chunks = chunks
         self.sources = sources
 
-    def search(self, query_embedding, top_k=3):
+    def search(self, query_embedding, top_k=3, min_score=None):
 
-        if self.index.ntotal == 0:
+        if self.index.ntotal == 0 or top_k <= 0:
             return []
 
         query_vector = np.asarray(
-            [query_embedding],
+            query_embedding,
             dtype="float32"
-        )
+        ).reshape(1, -1)
+
+        if query_vector.shape[1] != self.dimension:
+            raise ValueError("Query embedding dimension mismatch.")
+
+        if not np.isfinite(query_vector).all():
+            raise ValueError("Query embedding contains invalid values.")
+
+        norm = np.linalg.norm(query_vector)
+
+        if norm == 0:
+            return []
+
+        faiss.normalize_L2(query_vector)
 
         scores, indices = self.index.search(
             query_vector,
@@ -102,11 +149,18 @@ class VectorStore:
 
         for score, idx in zip(scores[0], indices[0]):
 
-            if idx >= 0:
-                results.append({
-                    "text": self.text_chunks[idx],
-                    "score": float(score),
-                    "source": self.sources[idx]
-                })
+            if idx < 0:
+                continue
+
+            score = float(score)
+
+            if min_score is not None and score < min_score:
+                continue
+
+            results.append({
+                "text": self.text_chunks[idx],
+                "score": score,
+                "source": self.sources[idx]
+            })
 
         return results

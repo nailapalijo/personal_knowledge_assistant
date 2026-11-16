@@ -1,9 +1,14 @@
 
+import hashlib
+import tempfile
 import streamlit as st
+import re
 from pathlib import Path
 
+from src.document_tasks import generate_quiz, summarize_document
 from src.knowledge_base import KnowledgeBase
-from src.rag import RAGAssistant
+from src.rag import QUIZ_MODEL_NAME, RAGAssistant
+from src.voice import transcribe_audio
 
 
 # ---------------------------------
@@ -24,202 +29,38 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-
-/* Main background */
-
 .stApp {
-    background: linear-gradient(135deg, #0b1020, #17132e);
-    color: #F8FAFC;
+    background: linear-gradient(135deg, #0b1020, #15112b);
+    color: #f4f4f8;
 }
-
-/* Main container */
-
-.block-container {
-    max-width: 1200px;
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-}
-
-/* Headings */
-
-h1, h2, h3 {
-    color: #A78BFA !important;
-}
-
-/* General text visibility */
-
-.stApp p,
-.stApp li,
-.stApp label,
-.stApp [data-testid="stCaptionContainer"] {
-    color: #F8FAFC;
-}
-
-/* Buttons */
-
-.stButton > button,
-.stFormSubmitButton > button {
-    background: linear-gradient(90deg, #6d4aff, #8b5cf6) !important;
-    color: #FFFFFF !important;
-    border: none !important;
-    border-radius: 10px;
-    min-height: 48px;
-    font-weight: 600;
-    width: 100%;
-    transition: background 0.2s ease;
-    touch-action: manipulation;
-    cursor: pointer;
-}
-
-.stButton > button p,
-.stFormSubmitButton > button p {
-    color: #FFFFFF !important;
-}
-
-.stButton > button:hover,
-.stFormSubmitButton > button:hover {
-    background: #9b7bff !important;
-    border: none !important;
-}
-
-/* Sidebar */
-
 [data-testid="stSidebar"] {
-    background: #111827;
+    background-color: #11172a;
 }
-
-/* Text input */
-
-.stTextInput input {
-    color: #F8FAFC !important;
-    background-color: #172033 !important;
+h1, h2, h3 {
+    color: #c4b5fd;
+}
+.stButton > button {
+    background: linear-gradient(90deg, #7c3aed, #4f46e5);
+    color: white;
+    border: none;
     border-radius: 10px;
-    min-height: 48px;
-    border: 1px solid #64748b !important;
-    font-size: 16px !important;
+    padding: 9px 18px;
 }
-
-.stTextInput input::placeholder {
-    color: #CBD5E1 !important;
-    opacity: 1;
+.stButton > button:hover {
+    background: #6d28d9;
+    color: white;
 }
-
-/* File uploader */
-
-[data-testid="stFileUploader"] {
-    border: 1px dashed #8b5cf6;
-    border-radius: 12px;
-    padding: 10px;
-}
-
-/* Chat messages */
-
-[data-testid="stChatMessage"] {
-    background: #172033 !important;
-    color: #F8FAFC !important;
-    border: 1px solid rgba(167,139,250,0.2);
-    border-radius: 12px;
-    padding: 14px;
-    margin-bottom: 10px;
-}
-
-[data-testid="stChatMessage"] p,
-[data-testid="stChatMessage"] li,
-[data-testid="stChatMessage"] span {
-    color: #F8FAFC !important;
-}
-
-/* Markdown answer text */
-
-[data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li {
-    color: #F8FAFC !important;
-}
-
-/* Metrics */
-
 [data-testid="stMetric"] {
-    background: rgba(139,92,246,0.10);
-    border: 1px solid rgba(139,92,246,0.25);
-    border-radius: 12px;
-    padding: 12px;
-}
-
-[data-testid="stMetricValue"] {
-    color: #FFFFFF !important;
-}
-
-/* Expanders */
-
-[data-testid="stExpander"] {
-    border: 1px solid rgba(167,139,250,0.3);
+    background: #1b2140;
+    padding: 15px;
     border-radius: 12px;
 }
-
-[data-testid="stExpander"] summary,
-[data-testid="stExpander"] summary p {
-    color: #F8FAFC !important;
-}
-
-/* Mobile responsive */
-
-@media screen and (max-width: 768px) {
-
-    .block-container {
-        padding: 1rem 0.8rem 2rem 0.8rem;
-    }
-
-    h1 {
-        font-size: 1.65rem !important;
-        line-height: 1.3 !important;
-    }
-
-    h2 {
-        font-size: 1.35rem !important;
-    }
-
-    h3 {
-        font-size: 1.1rem !important;
-    }
-
-    .stButton > button {
-        width: 100% !important;
-        min-height: 50px !important;
-        font-size: 16px !important;
-    }
-
-    .stTextInput input {
-        min-height: 50px !important;
-        font-size: 16px !important;
-    }
-
-    [data-testid="stChatMessage"] {
-        padding: 12px;
-    }
-}
-
-@media screen and (max-width: 480px) {
-
-    .block-container {
-        padding-left: 0.6rem;
-        padding-right: 0.6rem;
-    }
-
-    h1 {
-        font-size: 1.45rem !important;
-    }
-
-    [data-testid="stMetricValue"] {
-        font-size: 1.5rem;
-    }
-}
-
 </style>
 """, unsafe_allow_html=True)
 
 
 # ---------------------------------
-# LOAD AI MODELS
+# LOAD COMPONENTS
 # ---------------------------------
 
 @st.cache_resource
@@ -232,35 +73,75 @@ def load_ai_assistant():
     return RAGAssistant()
 
 
+@st.cache_resource
+def load_quiz_assistant():
+    return RAGAssistant(model_name=QUIZ_MODEL_NAME)
+
+
+@st.cache_resource
+def load_whisper_model():
+    from faster_whisper import WhisperModel
+    return WhisperModel(
+        "small",
+        device="cpu",
+        compute_type="int8"
+    )
+
+
 # ---------------------------------
 # SESSION STATE
 # ---------------------------------
 
-if "knowledge_base" not in st.session_state:
-    st.session_state.knowledge_base = None
+defaults = {
+    "knowledge_base": None,
+    "processed_files": [],
+    "chat_history": [],
+    "document_summary": "",
+    "summary_source": "",
+    "quiz_questions": [],
+    "quiz_answers": {},
+    "quiz_submitted": False,
+    "quiz_source": "",
+    "quiz_version": 0,
+    "last_audio_hash": "",
+    "voice_question": "",
+    "voice_widget_version": 0
+}
 
-if "processed_files" not in st.session_state:
-    st.session_state.processed_files = []
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 
 # ---------------------------------
-# RESTORE KNOWLEDGE BASE
+# VOICE RECORDING RESET
+# ---------------------------------
+
+def delete_voice_recording():
+    st.session_state.voice_question = ""
+    st.session_state.last_audio_hash = ""
+    st.session_state.voice_widget_version += 1
+
+
+# ---------------------------------
+# INITIALIZE KNOWLEDGE BASE
 # ---------------------------------
 
 if st.session_state.knowledge_base is None:
-
     try:
         st.session_state.knowledge_base = load_knowledge_base()
 
-        st.session_state.processed_files = list(
-            st.session_state.knowledge_base.documents_loaded
+        existing_docs = getattr(
+            st.session_state.knowledge_base,
+            "documents_loaded",
+            []
         )
 
+        if isinstance(existing_docs, list):
+            st.session_state.processed_files = existing_docs
+
     except Exception as error:
-        st.error(f"Knowledge Base loading error: {error}")
+        st.error(f"Knowledge Base Error: {error}")
 
 
 # ---------------------------------
@@ -269,9 +150,9 @@ if st.session_state.knowledge_base is None:
 
 st.title("🧠 Personal Knowledge Assistant")
 
-st.write(
-    "Your private AI assistant. Upload your documents "
-    "and ask questions using your AI model."
+st.markdown(
+    "Upload your documents, ask questions, generate summaries "
+    "and create quizzes using your personal knowledge base."
 )
 
 st.divider()
@@ -283,128 +164,452 @@ st.divider()
 
 with st.sidebar:
 
-    st.header("📚 Document Library")
+    st.header("📁 Document Manager")
 
     uploaded_files = st.file_uploader(
-        "Upload PDF or TXT documents",
+        "Upload PDF or TXT files",
         type=["pdf", "txt"],
         accept_multiple_files=True
     )
 
-    process_button = st.button(
-        "⚡ Process Documents",
-        use_container_width=True,
-        key="process_documents_button"
-    )
+    if st.button("Process Documents", width="stretch"):
+
+        if not uploaded_files:
+            st.warning("Please upload at least one document.")
+
+        elif st.session_state.knowledge_base is None:
+            st.error("Knowledge Base initialize nahi hua.")
+
+        else:
+            progress = st.progress(0)
+
+            for index, uploaded_file in enumerate(uploaded_files):
+
+                file_path = None
+
+                try:
+                    suffix = Path(uploaded_file.name).suffix
+
+                    with tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=suffix
+                    ) as temp_file:
+
+                        temp_file.write(uploaded_file.getvalue())
+                        file_path = temp_file.name
+
+                    added_chunks = st.session_state.knowledge_base.add_document(
+                        str(file_path),
+                        source_name=uploaded_file.name
+                    )
+
+                    if (
+                        uploaded_file.name
+                        in st.session_state.knowledge_base.documents_loaded
+                        and uploaded_file.name not in st.session_state.processed_files
+                    ):
+                        st.session_state.processed_files.append(
+                            uploaded_file.name
+                        )
+
+                    if added_chunks:
+                        st.success(f"Processed: {uploaded_file.name}")
+                    elif uploaded_file.name in st.session_state.processed_files:
+                        st.info(f"Already processed: {uploaded_file.name}")
+                    else:
+                        st.warning(f"No readable text found: {uploaded_file.name}")
+
+                except Exception as error:
+                    st.error(
+                        f"{uploaded_file.name}: {error}"
+                    )
+
+                finally:
+                    if file_path and Path(file_path).exists():
+                        Path(file_path).unlink(missing_ok=True)
+
+                progress.progress(
+                    (index + 1) / len(uploaded_files)
+                )
+
+            st.success("Document processing completed!")
 
     st.divider()
 
-    st.subheader("Knowledge Base")
-
-    st.metric(
-        "Processed Documents",
-        len(st.session_state.processed_files)
-    )
+    st.subheader("📚 Processed Documents")
 
     if st.session_state.processed_files:
-
-        for filename in st.session_state.processed_files:
-            st.write(f"📄 {filename}")
-
+        for document in st.session_state.processed_files:
+            st.write(f"📄 {document}")
     else:
-        st.caption("No documents processed yet.")
+        st.info("No documents processed yet.")
 
     st.divider()
 
-    if st.button(
-        "🗑️ Clear Chat",
-        use_container_width=True,
-        key="clear_chat_button"
-    ):
+    if st.button("🗑️ Clear Chat", width="stretch"):
         st.session_state.chat_history = []
         st.rerun()
 
 
 # ---------------------------------
-# PROCESS DOCUMENTS
+# LOAD ASSISTANT
 # ---------------------------------
 
-if process_button:
-
-    if not uploaded_files:
-
-        st.warning("Please upload a PDF or TXT file first.")
-
-    else:
-
-        with st.spinner("Processing documents..."):
-
-            try:
-
-                if st.session_state.knowledge_base is None:
-                    st.session_state.knowledge_base = load_knowledge_base()
-
-                upload_folder = Path("data/uploads")
-                upload_folder.mkdir(parents=True, exist_ok=True)
-
-                for uploaded_file in uploaded_files:
-
-                    if uploaded_file.name in st.session_state.processed_files:
-                        st.info(
-                            f"{uploaded_file.name} is already processed."
-                        )
-                        continue
-
-                    file_path = upload_folder / uploaded_file.name
-
-                    file_path.write_bytes(uploaded_file.getvalue())
-
-                    try:
-
-                        chunks = (
-                            st.session_state.knowledge_base.add_document(
-                                str(file_path)
-                            )
-                        )
-
-                        if chunks > 0:
-
-                            st.session_state.processed_files.append(
-                                uploaded_file.name
-                            )
-
-                            st.success(
-                                f"{uploaded_file.name} processed "
-                                f"successfully! ({chunks} chunks)"
-                            )
-
-                        else:
-
-                            st.warning(
-                                f"No readable text found in "
-                                f"{uploaded_file.name}."
-                            )
-
-                    except Exception as error:
-
-                        st.error(
-                            f"Error processing {uploaded_file.name}: {error}"
-                        )
-
-            except Exception as error:
-
-                st.error(f"Knowledge Base Error: {error}")
+try:
+    assistant = load_ai_assistant()
+except Exception as error:
+    assistant = None
+    st.error(f"AI Assistant Error: {error}")
 
 
 # ---------------------------------
-# MAIN CHAT AREA
+# DASHBOARD
 # ---------------------------------
+
+st.subheader("📊 Dashboard")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        "Uploaded Documents",
+        len(st.session_state.processed_files)
+    )
+
+with col2:
+    knowledge_base = st.session_state.knowledge_base
+    total_chunks = (
+        len(knowledge_base.vector_store.text_chunks)
+        if knowledge_base is not None
+        else 0
+    )
+
+    st.metric("Total Chunks", total_chunks)
+
+with col3:
+    st.metric("AI Model", "Qwen 2.5 · 1.5B")
 
 st.divider()
 
-st.header("💬 Ask Your Documents")
 
-st.write("Ask anything related to your uploaded documents.")
+# ---------------------------------
+# DOCUMENT SUMMARIZER
+# ---------------------------------
+
+st.header("📝 Document Summarizer")
+
+if st.session_state.processed_files:
+
+    selected_summary_doc = st.selectbox(
+        "Select document",
+        st.session_state.processed_files,
+        key="summary_document_select"
+    )
+
+    if st.button("Generate Summary"):
+        try:
+            with st.spinner("Generating summary..."):
+                summary = summarize_document(
+                    selected_summary_doc,
+                    st.session_state.knowledge_base
+                )
+
+                st.session_state.document_summary = summary
+                st.session_state.summary_source = selected_summary_doc
+        except Exception as error:
+            st.error(f"Summary error: {error}")
+
+    if (
+        st.session_state.document_summary
+        and st.session_state.summary_source == selected_summary_doc
+    ):
+
+        st.subheader(
+            f"Summary: {st.session_state.summary_source}"
+        )
+
+        st.write(st.session_state.document_summary)
+
+else:
+    st.info("Please upload and process a document first.")
+
+
+st.divider()
+
+
+# ---------------------------------
+# QUIZ GENERATOR
+# ---------------------------------
+
+st.header("🎯 Quiz Generator")
+
+if st.session_state.processed_files:
+
+    selected_quiz_doc = st.selectbox(
+        "Select document for quiz",
+        st.session_state.processed_files,
+        key="quiz_document_select"
+    )
+
+    if st.button("Generate Quiz"):
+        try:
+            with st.spinner("Loading the local quiz model and generating questions..."):
+                quiz_assistant = load_quiz_assistant()
+                questions = generate_quiz(
+                    selected_quiz_doc,
+                    st.session_state.knowledge_base,
+                    quiz_assistant
+                )
+
+            st.session_state.quiz_questions = questions
+            st.session_state.quiz_source = selected_quiz_doc
+            st.session_state.quiz_answers = {}
+            st.session_state.quiz_submitted = False
+            st.session_state.quiz_version += 1
+            if not questions:
+                st.warning(
+                    "The local model did not produce questions that "
+                    "could be verified against this document. Try again."
+                )
+        except Exception as error:
+            st.error(f"Quiz generation error: {error}")
+
+    if st.session_state.quiz_questions:
+
+        st.subheader(
+            f"Quiz: {st.session_state.quiz_source}"
+        )
+
+        for index, question in enumerate(
+            st.session_state.quiz_questions
+        ):
+
+            st.markdown(
+                f"**Q{index + 1}. {question.get('question', 'Question unavailable')}**"
+            )
+
+            options = question.get("options", [])
+
+            if options:
+
+                selected_answer = st.radio(
+                    "Choose your answer",
+                    options,
+                    key=f"quiz_{st.session_state.quiz_version}_{index}",
+                    index=None
+                )
+
+                st.session_state.quiz_answers[index] = selected_answer
+                st.caption(f"Difficulty: {question['difficulty']}")
+
+        if st.button("Submit Quiz"):
+
+            st.session_state.quiz_submitted = True
+
+        if st.session_state.quiz_submitted:
+
+            score = 0
+
+            for index, question in enumerate(
+                st.session_state.quiz_questions
+            ):
+
+                correct_answer = str(
+                    question.get("answer", "")
+                ).strip().upper()
+
+                selected = st.session_state.quiz_answers.get(
+                    index,
+                    ""
+                )
+
+                selected_letter = ""
+
+                if selected:
+                    match = re.match(
+                        r"^\s*([A-D])",
+                        selected.upper()
+                    )
+
+                    if match:
+                        selected_letter = match.group(1)
+
+                if selected_letter == correct_answer:
+                    score += 1
+                    st.success("Correct answer!")
+                else:
+                    st.error(
+                        f"Incorrect. Correct answer: {correct_answer}"
+                    )
+
+                explanation = question.get("explanation")
+
+                if explanation:
+                    st.caption(explanation)
+
+            st.subheader(
+                f"Your Score: {score}/{len(st.session_state.quiz_questions)}"
+            )
+
+else:
+    st.info("Upload a document to generate a quiz.")
+
+
+st.divider()
+
+
+# ---------------------------------
+# RAG CHAT + VOICE INPUT
+# ---------------------------------
+
+st.header("💬 Chat with Your Documents")
+
+st.write(
+    "Ask questions about your uploaded documents using text or voice."
+)
+
+voice_language = st.selectbox(
+    "Voice language",
+    ["Auto Detect", "English", "Urdu"],
+    key="voice_language"
+)
+
+language_code = {
+    "Auto Detect": None,
+    "English": "en",
+    "Urdu": "ur"
+}[voice_language]
+
+audio_widget_key = f"voice_audio_input_{st.session_state.voice_widget_version}"
+audio_file = st.audio_input(
+    "🎤 Record your question",
+    key=audio_widget_key
+)
+
+if audio_file:
+
+    audio_bytes = audio_file.getvalue()
+
+    audio_hash = hashlib.sha256(
+        audio_bytes
+    ).hexdigest()
+
+    if audio_hash != st.session_state.last_audio_hash:
+
+        try:
+            with st.spinner(
+                "Converting your voice into text..."
+            ):
+
+                transcript, detected_language = transcribe_audio(
+                    audio_bytes,
+                    language_code,
+                    load_whisper_model()
+                )
+
+            st.session_state.voice_question = transcript
+            st.session_state.last_audio_hash = audio_hash
+
+            if transcript:
+                st.success(
+                    f"Detected language: {detected_language}"
+                )
+            else:
+                st.warning(
+                    "Voice se text recognize nahi hua. Dobara record karein."
+                )
+
+        except Exception as error:
+            st.session_state.last_audio_hash = audio_hash
+            st.error(
+                f"Voice recognition error: {error}"
+            )
+
+if st.session_state.voice_question:
+
+    st.text_area(
+        "Recognized voice text",
+        value=st.session_state.voice_question,
+        height=90,
+        disabled=True,
+        key="recognized_voice_display"
+    )
+
+if audio_file is not None or st.session_state.voice_question:
+    if st.button("🗑️ Delete Recording", key="delete_voice_button"):
+        delete_voice_recording()
+        st.rerun()
+
+typed_question = st.chat_input(
+    "Ask a question about your documents..."
+)
+
+voice_submit = st.button(
+    "🎤 Ask with Voice",
+    disabled=not bool(st.session_state.voice_question)
+)
+
+question_to_ask = typed_question
+
+if voice_submit:
+    question_to_ask = st.session_state.voice_question
+
+
+# ---------------------------------
+# PROCESS USER QUESTION
+# ---------------------------------
+
+if question_to_ask:
+
+    if not st.session_state.processed_files:
+
+        st.warning(
+            "Please upload and process documents first."
+        )
+
+    elif assistant is None:
+
+        st.error(
+            "AI Assistant load nahi hua."
+        )
+
+    else:
+
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": question_to_ask
+        })
+
+        try:
+            with st.spinner(
+                "Searching documents and generating answer..."
+            ):
+
+                context = st.session_state.knowledge_base.search_documents(
+                    question_to_ask,
+                    top_k=5
+                )
+
+                answer = assistant.generate_answer(
+                    question_to_ask,
+                    context
+                )
+
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": answer
+            })
+
+        except Exception as error:
+
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": f"Error generating answer: {error}"
+            })
+
+        if voice_submit:
+            delete_voice_recording()
+        st.rerun()
 
 
 # ---------------------------------
@@ -418,172 +623,47 @@ for message in st.session_state.chat_history:
 
 
 # ---------------------------------
-# QUESTION INPUT
-# ---------------------------------
-
-question = st.text_input(
-    "Your question",
-    placeholder="Example: What is my educational background?",
-    key="question_input"
-)
-
-ask_button = st.button(
-    "Ask AI 🚀",
-    use_container_width=True,
-    key="ask_ai_button",
-    type="primary"
-)
-
-
-# ---------------------------------
-# IMPROVE SEARCH QUERY
-# ---------------------------------
-
-def improve_search_query(question):
-
-    q = question.lower()
-
-    if any(word in q for word in ["name", "who am i"]):
-
-        return "Naila Palijo full name personal profile"
-
-    elif any(word in q for word in [
-        "university", "graduate", "graduated"
-    ]):
-
-        return (
-            "Naila Palijo graduated from Mehran University "
-            "of Engineering and Technology MUET Jamshoro"
-        )
-
-    elif any(word in q for word in [
-        "degree", "education", "educational"
-    ]):
-
-        return (
-            "Naila Palijo Bachelor Computer Systems Engineering "
-            "Mehran University Jamshoro education"
-        )
-
-    elif any(word in q for word in [
-        "skill", "technical"
-    ]):
-
-        return (
-            "Naila Palijo technical skills Python Django Java "
-            "JavaScript React HTML CSS Git"
-        )
-
-    else:
-
-        return question
-
-
-# ---------------------------------
-# GENERATE ANSWER
-# ---------------------------------
-
-if ask_button:
-
-    if not question.strip():
-
-        st.warning("Please type a question first.")
-
-    elif (
-        st.session_state.knowledge_base is None
-        or not st.session_state.processed_files
-    ):
-
-        st.warning(
-            "Please upload and process a document first."
-        )
-
-    else:
-
-        st.session_state.chat_history.append({
-            "role": "user",
-            "content": question
-        })
-
-        with st.spinner(
-            "Searching documents and generating your answer..."
-        ):
-
-            try:
-
-                search_query = improve_search_query(question)
-
-                results = (
-                    st.session_state.knowledge_base.search_documents(
-                        search_query,
-                        top_k=3
-                    )
-                )
-
-                if results:
-
-                    context = "\n\n".join(
-                        item["text"] for item in results
-                    )
-
-                    assistant = load_ai_assistant()
-
-                    answer = assistant.generate_answer(
-                        question,
-                        context
-                    )
-
-                    if not answer or not str(answer).strip():
-                        answer = "The AI model returned an empty response. Please try again."
-
-                else:
-
-                    answer = (
-                        "I could not find relevant information "
-                        "in your uploaded documents."
-                    )
-
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": str(answer)
-                })
-
-            except Exception as error:
-
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": f"AI Error: {error}"
-                })
-
-        st.rerun()
-
-
-# ---------------------------------
 # ABOUT PROJECT
 # ---------------------------------
 
 st.divider()
 
-with st.expander("ℹ️ About This Project"):
+with st.expander("ℹ️ About Personal Knowledge Assistant"):
 
-    st.write("""
-    Personal Knowledge Assistant is an AI-powered application.
+    st.markdown("""
+    ### Technologies Used
 
-    **Features:**
+    - **Python:** Main programming language
+    - **Streamlit:** Web application interface
+    - **Hugging Face Transformers:** Local language model
+    - **Qwen 2.5 1.5B / 0.5B:** Local answers and faster quiz generation
+    - **Multilingual E5-small:** Local document and query embeddings
+    - **FAISS:** Vector similarity search
+    - **RAG:** Retrieval Augmented Generation
+    - **Faster Whisper small:** Local English and Urdu voice transcription
 
-    - PDF and TXT document upload
-    - Automatic text extraction
-    - Text chunking
-    - Hugging Face embeddings
-    - FAISS vector database
-    - Semantic document search
-    - Retrieval-Augmented Generation (RAG)
-    - Local FLAN-T5 language model
+    ### Features
 
-    **Privacy:** The application uses its configured AI model.
-    No paid OpenAI API is required.
+    - Upload PDF and TXT documents
+    - Ask questions from uploaded documents
+    - Retrieve relevant document information
+    - Generate document summaries
+    - Generate multiple-choice quizzes
+    - Ask questions through English and Urdu voice input
+    - Delete a voice recording without clearing chat history
+
     """)
 
-st.caption(
-    "Built with Python, Streamlit, Hugging Face and FAISS."
+
+# ---------------------------------
+# FOOTER
+# ---------------------------------
+
+st.markdown(
+    """
+    <div style="text-align:center; color:#aaa; padding:20px;">
+        Built with Python, Streamlit, Hugging Face and FAISS.
+    </div>
+    """,
+    unsafe_allow_html=True
 )
