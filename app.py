@@ -1,13 +1,16 @@
 
 import hashlib
 import tempfile
+import uuid
 import streamlit as st
 import re
 from pathlib import Path
 
 from src.document_tasks import generate_quiz, summarize_document
+from src.document_loader import MAX_DOCUMENT_SIZE_BYTES
 from src.knowledge_base import KnowledgeBase
 from src.rag import QUIZ_MODEL_NAME, RAGAssistant
+from src.runtime import get_runtime_mode
 from src.voice import transcribe_audio
 
 
@@ -19,7 +22,7 @@ st.set_page_config(
     page_title="Personal Knowledge Assistant",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="auto"
 )
 
 
@@ -55,6 +58,112 @@ h1, h2, h3 {
     padding: 15px;
     border-radius: 12px;
 }
+
+.block-container {
+    max-width: 1200px;
+}
+
+[data-testid="stMarkdownContainer"],
+[data-testid="stChatMessage"] {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+    .block-container {
+        padding: 1rem 1rem 6rem !important;
+    }
+
+    [data-testid="stElementContainer"]:has(.stButton) {
+        width: 100%;
+    }
+
+    [data-testid="stHorizontalBlock"] {
+        flex-direction: column !important;
+        gap: 0.75rem !important;
+    }
+
+    [data-testid="stColumn"] {
+        flex: 1 1 100% !important;
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    .stButton,
+    .stButton > button,
+    [data-testid="stFormSubmitButton"] > button {
+        min-height: 44px;
+        width: 100%;
+    }
+
+    [data-testid="stFileUploader"],
+    [data-testid="stAudioInput"],
+    [data-testid="stChatInput"],
+    [data-testid="stRadio"] {
+        max-width: 100%;
+        min-width: 0;
+        width: 100%;
+    }
+
+    [data-testid="stFileUploaderDropzone"] button,
+    [data-testid="stAudioInputActionButton"],
+    [data-testid="stChatInputSubmitButton"] {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    [data-testid="stSelectbox"] [role="combobox"],
+    [data-testid="stChatInputTextArea"] {
+        min-height: 44px;
+    }
+
+    [data-testid="stSelectbox"] button {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    [data-testid="stRadio"] label,
+    [data-testid="stFileUploader"] *,
+    [data-testid="stChatMessage"] * {
+        overflow-wrap: anywhere;
+        white-space: normal;
+    }
+
+    [data-testid="stRadio"] label {
+        min-height: 44px;
+    }
+
+    [data-testid="stBottomBlockContainer"] {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .block-container {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+    }
+
+    h1 {
+        font-size: 1.65rem !important;
+        line-height: 1.2;
+    }
+
+    h2 {
+        font-size: 1.4rem !important;
+    }
+
+    h3 {
+        font-size: 1.15rem !important;
+    }
+
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stMarkdownContainer"] p {
+        font-size: 1rem;
+        line-height: 1.5;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,29 +172,33 @@ h1, h2, h3 {
 # LOAD COMPONENTS
 # ---------------------------------
 
-@st.cache_resource
-def load_knowledge_base():
-    return KnowledgeBase()
+def load_knowledge_base(storage_dir, mode):
+    return KnowledgeBase(storage_dir=storage_dir, mode=mode)
 
 
 @st.cache_resource
-def load_ai_assistant():
-    return RAGAssistant()
+def load_ai_assistant(mode):
+    return RAGAssistant(mode=mode)
 
 
 @st.cache_resource
-def load_quiz_assistant():
-    return RAGAssistant(model_name=QUIZ_MODEL_NAME)
+def load_quiz_assistant(mode):
+    return RAGAssistant(model_name=QUIZ_MODEL_NAME, mode=mode)
 
 
 @st.cache_resource
-def load_whisper_model():
+def load_whisper_model(mode):
     from faster_whisper import WhisperModel
     return WhisperModel(
-        "small",
+        "tiny" if mode == "cloud" else "small",
         device="cpu",
-        compute_type="int8"
+        compute_type="int8",
+        cpu_threads=2,
+        num_workers=1
     )
+
+
+RUNTIME_MODE = get_runtime_mode()
 
 
 # ---------------------------------
@@ -105,7 +218,8 @@ defaults = {
     "quiz_version": 0,
     "last_audio_hash": "",
     "voice_question": "",
-    "voice_widget_version": 0
+    "voice_widget_version": 0,
+    "cloud_storage_id": ""
 }
 
 for key, value in defaults.items():
@@ -129,7 +243,19 @@ def delete_voice_recording():
 
 if st.session_state.knowledge_base is None:
     try:
-        st.session_state.knowledge_base = load_knowledge_base()
+        storage_dir = None
+        if RUNTIME_MODE == "cloud":
+            if not st.session_state.cloud_storage_id:
+                st.session_state.cloud_storage_id = uuid.uuid4().hex
+            storage_dir = (
+                Path(tempfile.gettempdir())
+                / "personal_knowledge_assistant"
+                / st.session_state.cloud_storage_id
+            )
+        st.session_state.knowledge_base = load_knowledge_base(
+            storage_dir=storage_dir,
+            mode=RUNTIME_MODE
+        )
 
         existing_docs = getattr(
             st.session_state.knowledge_base,
@@ -155,6 +281,15 @@ st.markdown(
     "and create quizzes using your personal knowledge base."
 )
 
+if RUNTIME_MODE == "cloud":
+    st.info(
+        "Cloud mode uses CPU-only, document-grounded retrieval. Generative "
+        "Qwen models are disabled to stay within free-instance memory limits; "
+        "answers quote relevant source text instead. Uploaded documents and "
+        "indexes use temporary session storage and may be lost when the app "
+        "restarts or the session ends."
+    )
+
 st.divider()
 
 
@@ -169,7 +304,9 @@ with st.sidebar:
     uploaded_files = st.file_uploader(
         "Upload PDF or TXT files",
         type=["pdf", "txt"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        max_upload_size=20,
+        help="PDF and TXT files up to 20 MB each. Processing is temporary in Cloud mode."
     )
 
     if st.button("Process Documents", width="stretch"):
@@ -189,6 +326,12 @@ with st.sidebar:
 
                 try:
                     suffix = Path(uploaded_file.name).suffix
+                    if suffix.lower() not in {".pdf", ".txt"}:
+                        raise ValueError("Only PDF and TXT files are supported.")
+                    if uploaded_file.size > MAX_DOCUMENT_SIZE_BYTES:
+                        raise ValueError(
+                            "Document exceeds the 20 MB processing limit."
+                        )
 
                     with tempfile.NamedTemporaryFile(
                         delete=False,
@@ -256,7 +399,7 @@ with st.sidebar:
 # ---------------------------------
 
 try:
-    assistant = load_ai_assistant()
+    assistant = load_ai_assistant(RUNTIME_MODE)
 except Exception as error:
     assistant = None
     st.error(f"AI Assistant Error: {error}")
@@ -287,7 +430,10 @@ with col2:
     st.metric("Total Chunks", total_chunks)
 
 with col3:
-    st.metric("AI Model", "Qwen 2.5 · 1.5B")
+    st.metric(
+        "AI Model",
+        "Extractive Cloud mode" if RUNTIME_MODE == "cloud" else "Qwen 2.5 · 1.5B"
+    )
 
 st.divider()
 
@@ -297,6 +443,10 @@ st.divider()
 # ---------------------------------
 
 st.header("📝 Document Summarizer")
+st.caption(
+    "Summaries are extractive: they select sentences from the uploaded "
+    "document and are not LLM-generated."
+)
 
 if st.session_state.processed_files:
 
@@ -351,10 +501,21 @@ if st.session_state.processed_files:
         key="quiz_document_select"
     )
 
+    if RUNTIME_MODE == "cloud":
+        st.caption(
+            "Cloud quizzes are built from exact sentences in the selected "
+            "document; no generative model is downloaded or run."
+        )
+
     if st.button("Generate Quiz"):
         try:
-            with st.spinner("Loading the local quiz model and generating questions..."):
-                quiz_assistant = load_quiz_assistant()
+            status = (
+                "Building a source-based quiz..."
+                if RUNTIME_MODE == "cloud"
+                else "Loading the local quiz model and generating questions..."
+            )
+            with st.spinner(status):
+                quiz_assistant = load_quiz_assistant(RUNTIME_MODE)
                 questions = generate_quiz(
                     selected_quiz_doc,
                     st.session_state.knowledge_base,
@@ -368,8 +529,8 @@ if st.session_state.processed_files:
             st.session_state.quiz_version += 1
             if not questions:
                 st.warning(
-                    "The local model did not produce questions that "
-                    "could be verified against this document. Try again."
+                    "There is not enough distinct, readable source text to "
+                    "create a verifiable quiz."
                 )
         except Exception as error:
             st.error(f"Quiz generation error: {error}")
@@ -483,7 +644,17 @@ language_code = {
 audio_widget_key = f"voice_audio_input_{st.session_state.voice_widget_version}"
 audio_file = st.audio_input(
     "🎤 Record your question",
-    key=audio_widget_key
+    key=audio_widget_key,
+    help=(
+        "Requires this browser to support audio recording and have microphone "
+        "permission. If recording is unavailable, use the text chat below."
+    )
+)
+
+st.caption(
+    "Voice recognition uses a CPU Whisper model downloaded on first use; "
+    "Cloud transcription may be slower. Text chat is available if your "
+    "browser blocks microphone access."
 )
 
 if audio_file:
@@ -498,13 +669,13 @@ if audio_file:
 
         try:
             with st.spinner(
-                "Converting your voice into text..."
+                "Loading the CPU voice model if needed and transcribing..."
             ):
 
                 transcript, detected_language = transcribe_audio(
                     audio_bytes,
                     language_code,
-                    load_whisper_model()
+                    load_whisper_model(RUNTIME_MODE)
                 )
 
             st.session_state.voice_question = transcript
@@ -636,11 +807,11 @@ with st.expander("ℹ️ About Personal Knowledge Assistant"):
     - **Python:** Main programming language
     - **Streamlit:** Web application interface
     - **Hugging Face Transformers:** Local language model
-    - **Qwen 2.5 1.5B / 0.5B:** Local answers and faster quiz generation
-    - **Multilingual E5-small:** Local document and query embeddings
+    - **Qwen 2.5 1.5B / 0.5B:** Optional, lazy-loaded local answers and quizzes
+    - **Multilingual E5-small:** Optional local document and query embeddings
     - **FAISS:** Vector similarity search
     - **RAG:** Retrieval Augmented Generation
-    - **Faster Whisper small:** Local English and Urdu voice transcription
+    - **Faster Whisper:** On-demand CPU English and Urdu transcription
 
     ### Features
 

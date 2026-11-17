@@ -251,10 +251,96 @@ def validate_quiz(data, context):
     return validated
 
 
+def generate_extractive_quiz(document_name, knowledge_base, max_questions=5):
+    """Create quiz items from exact source sentences without generative AI."""
+    chunks = get_document_chunks(document_name, knowledge_base)
+    sentences = []
+    seen = set()
+    for chunk in chunks:
+        for candidate in re.split(r"(?<=[.!?؟])\s+|[\r\n]+", chunk):
+            sentence = re.sub(r"\s+", " ", candidate).strip(" \t-•")
+            normalized = " ".join(_words(sentence))
+            if len(_meaningful_words(sentence, _QUIZ_STOP_WORDS)) < 3:
+                continue
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                sentences.append(sentence)
+
+    if len(sentences) < 4:
+        return []
+
+    sentence_words = [
+        set(_meaningful_words(sentence, _QUIZ_STOP_WORDS))
+        for sentence in sentences
+    ]
+    questions = []
+    used_keywords = set()
+
+    for answer_index, answer_sentence in enumerate(sentences):
+        keywords = sorted(
+            sentence_words[answer_index],
+            key=lambda word: (len(word), word),
+            reverse=True
+        )
+        keyword = next(
+            (
+                word for word in keywords
+                if word not in used_keywords
+                and all(
+                    word not in words
+                    for index, words in enumerate(sentence_words)
+                    if index != answer_index
+                )
+            ),
+            None
+        )
+        if keyword is None:
+            continue
+
+        distractors = [
+            sentence
+            for index, sentence in enumerate(sentences)
+            if index != answer_index and keyword not in sentence_words[index]
+        ][:3]
+        if len(distractors) != 3:
+            continue
+
+        options = [answer_sentence, *distractors]
+        rotation = len(questions) % len(options)
+        options = options[rotation:] + options[:rotation]
+        correct_index = options.index(answer_sentence)
+        sentence_length = len(_words(answer_sentence))
+        difficulty = (
+            "Easy" if sentence_length <= 12
+            else "Medium" if sentence_length <= 22
+            else "Hard"
+        )
+        questions.append({
+            "question": f"Which statement in the document mentions “{keyword}”?",
+            "options": [
+                f"{chr(ord('A') + index)}. {option}"
+                for index, option in enumerate(options)
+            ],
+            "answer": chr(ord("A") + correct_index),
+            "explanation": (
+                f"The source sentence mentions “{keyword}”: {answer_sentence}"
+            ),
+            "difficulty": difficulty
+        })
+        used_keywords.add(keyword)
+        if len(questions) >= max_questions:
+            break
+
+    return questions
+
+
 def generate_quiz(document_name, knowledge_base, assistant):
     chunks = get_document_chunks(document_name, knowledge_base)
     if not chunks:
         return []
+
+    if assistant is None or not getattr(assistant, "supports_generation", True):
+        return generate_extractive_quiz(document_name, knowledge_base)
 
     if len(chunks) > 8:
         selected_indices = [

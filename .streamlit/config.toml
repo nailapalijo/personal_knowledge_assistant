@@ -7,7 +7,11 @@ textColor = "#F8FAFC"
 codeTextColor = "#E6EAF2"
 linkColor = "#A5B4FC"
 font = "sans serif"
+baseFontSize = 16
 
 [theme.sidebar]
 backgroundColor = "#111827"
 secondaryBackgroundColor = "#1F2937"
+
+[server]
+maxUploadSize = 20

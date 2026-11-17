@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 from src.document_tasks import (
+    generate_extractive_quiz,
     generate_quiz,
     get_document_chunks,
     parse_quiz,
@@ -110,6 +111,76 @@ class DocumentTaskTests(unittest.TestCase):
         self.assertEqual(questions[0]["difficulty"], "Medium")
         self.assertIn("five years", assistant.context)
         self.assertEqual(assistant.max_new_tokens, 450)
+
+    def test_cloud_quiz_uses_verifiable_source_sentences(self):
+        knowledge_base = SimpleNamespace(
+            vector_store=SimpleNamespace(
+                text_chunks=[
+                    "Orchids bloom during spring. "
+                    "Jupiter has many moons. "
+                    "Granite forms from cooled magma. "
+                    "Amphibians can live on land."
+                ],
+                sources=["science.txt"],
+            )
+        )
+
+        questions = generate_extractive_quiz("science.txt", knowledge_base)
+
+        self.assertGreaterEqual(len(questions), 1)
+        for question in questions:
+            self.assertEqual(len(question["options"]), 4)
+            self.assertIn(question["difficulty"], {"Easy", "Medium", "Hard"})
+            source_sentences = [
+                sentence.strip().rstrip(".")
+                for sentence in knowledge_base.vector_store.text_chunks[0].split(". ")
+            ]
+            option_sentences = [
+                option[3:].rstrip(".") for option in question["options"]
+            ]
+            self.assertEqual(len(set(option_sentences)), 4)
+            for sentence in option_sentences:
+                self.assertIn(sentence, source_sentences)
+            keyword = question["question"].split("“", 1)[1].split("”", 1)[0]
+            self.assertEqual(
+                sum(
+                    keyword.casefold() in option.casefold()
+                    for option in option_sentences
+                ),
+                1,
+            )
+            correct_index = ord(question["answer"]) - ord("A")
+            self.assertIn(keyword.casefold(), option_sentences[correct_index].casefold())
+            self.assertIn(question["explanation"].split(":", 1)[-1].strip(),
+                          " ".join(knowledge_base.vector_store.text_chunks))
+
+    def test_cloud_quiz_route_does_not_call_a_generator(self):
+        knowledge_base = SimpleNamespace(
+            vector_store=SimpleNamespace(
+                text_chunks=[
+                    "Orchids bloom during spring. "
+                    "Jupiter has many moons. "
+                    "Granite forms from cooled magma. "
+                    "Amphibians can live on land."
+                ],
+                sources=["science.txt"],
+            )
+        )
+
+        class CloudAssistant:
+            supports_generation = False
+
+            def generate_content(self, *args, **kwargs):
+                raise AssertionError("Cloud quizzes must not invoke generation.")
+
+        questions = generate_quiz(
+            "science.txt",
+            knowledge_base,
+            CloudAssistant(),
+        )
+
+        self.assertTrue(questions)
+        self.assertEqual(len(questions[0]["options"]), 4)
 
     def test_ingestion_keeps_uploaded_filename_not_temporary_name(self):
         class FakeModel:

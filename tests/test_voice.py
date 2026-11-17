@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from types import SimpleNamespace
 
@@ -39,6 +40,18 @@ class VoiceTranscriptionTests(unittest.TestCase):
         self.assertEqual(transcript, "Urdu transcript")
         self.assertEqual(model.language, None)
         self.assertEqual(detected_language, "ur")
+
+    def test_transcription_errors_are_propagated_and_temporary_audio_is_removed(self):
+        class FailingModel:
+            def transcribe(self, audio_path, **kwargs):
+                self.audio_path = audio_path
+                raise RuntimeError("model unavailable")
+
+        model = FailingModel()
+        with self.assertRaisesRegex(RuntimeError, "model unavailable"):
+            transcribe_audio(b"wav-data", None, model)
+
+        self.assertFalse(os.path.exists(model.audio_path))
 
 
 if __name__ == "__main__":

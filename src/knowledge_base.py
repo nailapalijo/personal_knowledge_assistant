@@ -6,9 +6,12 @@ from pathlib import Path
 from rank_bm25 import BM25Plus
 
 from src.embeddings import (
+    EMBEDDING_DIMENSION,
+    HASHING_MODEL_NAME,
     MODEL_NAME,
     create_embeddings,
     create_query_embedding,
+    load_cloud_embedding_model,
     load_embedding_model,
 )
 from src.document_loader import load_document
@@ -62,12 +65,20 @@ def tokenize(text):
 
 class KnowledgeBase:
 
-    def __init__(self, storage_dir="data/faiss"):
-        print("Loading embedding model...")
+    def __init__(self, storage_dir="data/faiss", mode="local"):
+        if mode not in {"cloud", "local"}:
+            raise ValueError("mode must be either 'cloud' or 'local'.")
 
-        self.model = load_embedding_model()
-        self.storage_dir = Path(storage_dir)
-        self.vector_store = VectorStore(storage_dir=self.storage_dir)
+        self.mode = mode
+        self.embedding_model_name = (
+            HASHING_MODEL_NAME if mode == "cloud" else MODEL_NAME
+        )
+        self.model = None
+        self.storage_dir = Path(storage_dir or "data/faiss")
+        self.vector_store = VectorStore(
+            dimension=EMBEDDING_DIMENSION,
+            storage_dir=self.storage_dir
+        )
 
         self.metadata_path = self.storage_dir / "documents.json"
         self.chunks_path = self.storage_dir / "chunks.json"
@@ -94,6 +105,15 @@ class KnowledgeBase:
 
         print("Knowledge Base initialized successfully!")
 
+    def _get_model(self):
+        if self.model is None:
+            self.model = (
+                load_cloud_embedding_model()
+                if self.mode == "cloud"
+                else load_embedding_model()
+            )
+        return self.model
+
     def _ensure_current_embeddings(self):
         chunks, sources = self._read_chunks()
 
@@ -102,15 +122,20 @@ class KnowledgeBase:
             with open(self.embedding_metadata_path, "r", encoding="utf-8") as file:
                 saved_model = json.load(file).get("model")
 
-        if chunks and saved_model != MODEL_NAME:
+        if chunks and saved_model != self.embedding_model_name:
             embeddings = create_embeddings(
                 chunks,
-                self.model
+                self._get_model()
             )
             self.vector_store.replace_documents(chunks, embeddings, sources)
 
         with open(self.embedding_metadata_path, "w", encoding="utf-8") as file:
-            json.dump({"model": MODEL_NAME}, file, ensure_ascii=False, indent=2)
+            json.dump(
+                {"model": self.embedding_model_name},
+                file,
+                ensure_ascii=False,
+                indent=2
+            )
 
     def _read_chunks(self):
 
@@ -179,7 +204,7 @@ class KnowledgeBase:
 
         embeddings = create_embeddings(
             chunks,
-            self.model
+            self._get_model()
         )
 
         self.vector_store.add_documents(
@@ -218,7 +243,7 @@ class KnowledgeBase:
         query_tokens = tokenize(question)
         query_terms = set(query_tokens)
 
-        query_embedding = create_query_embedding(question, self.model)
+        query_embedding = create_query_embedding(question, self._get_model())
 
         candidate_count = min(
             max(top_k * 5, 10),

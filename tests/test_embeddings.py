@@ -1,6 +1,10 @@
 import unittest
 
-from src.embeddings import create_embeddings, create_query_embedding
+from src.embeddings import (
+    HashingEmbeddingModel,
+    create_embeddings,
+    create_query_embedding,
+)
 
 
 class EmbeddingTests(unittest.TestCase):
@@ -18,6 +22,14 @@ class EmbeddingTests(unittest.TestCase):
 
         self.assertEqual(create_query_embedding("a question", model), "query: a question")
         self.assertEqual(model.texts, "query: a question")
+
+    def test_hashing_embeddings_are_normalized_and_dimensioned(self):
+        model = HashingEmbeddingModel()
+        vectors = create_embeddings(["project started in 2024"], model)
+        query = create_query_embedding("project started in 2024", model)
+
+        self.assertEqual(vectors.shape, (1, 384))
+        self.assertAlmostEqual(float((vectors[0] @ query)), 1.0, places=5)
 
 
 if __name__ == "__main__":
